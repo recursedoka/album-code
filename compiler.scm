@@ -5,98 +5,142 @@
 
 ;;;;;;;;;;;;;;;;;;;;
 
-(def convert-prefixes
-  (fn (prefixes string)
-    "Converts prefixes to a form with the operator and what follows the prefix.
+(defn find-form-end (string index)
+  (defn rec (nesting index)
+    (if (> nesting 0)
+        (let ((next (find-first string (char-set #\( #\)) index
+                                (fn (string i)
+                                    (not (equal? (string-ref string (-- i)) #\\))))))
+          (if next
+              (let ((paren (string-ref string next)))
+                (if (equal? paren #\()
+                    (rec (++ nesting) (++ next))
+                    (rec (-- nesting) (++ next))))
+              #f))
+        index))
+  (rec 1 (++ index)))
 
-     The `prefixes` list contains any number of prefix characters, each followed
-     by their corresponding operation. Each prefix-operation pair specifies a
-     single conversion to take place. Each conversion looks for the prefix
-     character, and takes whatever directly follows it, either a list or an
-     atom, and converts it to a form with the first item being the operation and
-     the second item being whatever followed the prefix character."
-     (def a (distribute prefixes))
-     (def chars (car a))
-     (def ops (cadr a))
-     (def le (length chars))
-     (def handle-list
-       (fn (str index)
-         )) ; find the matching paren
-     (def handle-atom
-       (fn (str index)
-         )) ; find the next space
-     (def handle-prefix
-       (fn (str index)
-         (def pchar (string-ref str index))
-         (if (equal? (member pchar chars) #f)
-           (if (equal? (list-ref str index) #\()
-             (handle-list str index)
-             (handle-atom str index))
-           (letrec ((opind (list-index chars pchar))
-                    (op (list-ref ops opind))
-                    (next (handle-prefix str (++ index))))
-             (list (string-append "(" op " " (car next) ")") (cadr next))))))
-     (def convert-prefix
-       (fn (prefix-char str)
-         (def precheck (make-prefix-checker #\\))
-         (def rec
-           (fn (str)
-             (def i (find-first str prefix-char precheck))
-             (if (equal? i #f)
-               str
-               (rec
-                 (let ((res (handle-prefix str i)))
-                 (substring-set! ; THIS IS WRONG
-                   (string-copy str)
-                   i (cadr res)
-                   (car res)))))))
-         (rec str)))
-     (def rec
-       (fn (i str)
-         (if (< i le)
-           (rec (++ i) (convert-prefix (list-ref chars i) str))
-           str)))
-     (rec 0 string)))
+(defn find-atom-end (string index)
+  (def i (find-first string #\space index
+                     (fn (string i)
+                         (not (equal? (string-ref string (-- i)) #\\)))))
+  (if (not (equal? i #f))
+      (++ i)
+      #f))
 
-(def convert-string
-  (fn (delimiter escape-character string)
-    "Converts instances of strings with escapes into lists of characters.
+(defn convert-prefixes (prefixes string)
+  "Converts prefixes to a form with the operator and what follows the prefix.
 
-     Strings are delimited with the specified delimiter, and have an escape
-     character to allow inserting special characters, like carriage returns or
-     the delimiter itself. The table demonstrates some conversions if the escape
-     character is `~`.
+  The `prefixes` list contains any number of prefix characters, each followed
+  by their corresponding operation. Each prefix-operation pair specifies a
+  single conversion to take place. Each conversion looks for the prefix
+  character, and takes whatever directly follows it, either a list or an
+  atom, and converts it to a form with the first item being the operation and
+  the second item being whatever followed the prefix character."  
+  (def a (distribute prefixes))
+  (def chars (car a))
+  (def pre-set (list->char-set chars))
+  (def index (find-first string pre-set 0
+                         (fn (string i)
+                             (not (equal? (string-ref string (-- i)) #\\)))))
+  (if index
+      (let ((before (substring string 0 index)))
+        (defn rec (i)
+          (def next (string-ref i))
+          (def op (list-ref (cdr a) (list-index chars (string-ref index))))
+          (cond
+            ((equal? next #\()
+             (let ((end (find-form-end string index)))
+               (cons (convert-prefixes prefixes (substring index end)) end)))
+            ((char-set-contains? pre-set next)
+             (let ((n (rec (++ i))))
+               (cons (string-append "(" op " " (car n) ")") (cdr n))))
+            (else
+             (let (end (find-atom-end string index))
+               (cons (substring index end) end)))))
+        (def ret (rec index))
+        (string-append before (car form) (convert-prefixes prefixes (substring (cdr form)))))
+      string))
 
-     Escape  |Result
-     --------|--------
-     ~n      |\newline
-     ~t      |\tab
-     ~c      |\cr
-     ~~      |\~"))
+(defn find-string-delimiter (string delimiter index)
+  (defn i (find-first string delimiter index
+                      (fn (string i)
+                          (not (equal? (string-ref string (-- i)) #\\)))))
+  (if (not (equal? i #f))
+      i
+      #f))
 
-(def remove-comments
-  (fn (comment-character string)
-    "Removes anything from the comment character to the end of the line"))
+(defn convert-characters (escape-character string)
+  (defn rec (i)
+    (def char (string-ref string char))
+    
+    (if (equal? char escape-character)
+        ()
+        (string-append (string #\\ char) " " (rec (++ i)))))
+    (string-append "(" (rec 0) ")"))
 
-(def parse-list
-  (fn (reader)
-    "Parses lists in s-expr syntax"))
+(defn convert-string (delimiter escape-character string)
+  "Converts instances of strings with escapes into lists of characters.
 
-(def parse-number
-  (fn (reader)
-    "Parses rational, complex, integer and real numbers"))
+  Strings are delimited with the specified delimiter, and have an escape
+  character to allow inserting special characters, like carriage returns or
+  the delimiter itself. The table demonstrates some conversions if the escape
+  character is `~`.
 
-(def parse-character
-  (fn (reader)
-    "Parses characters prefixed with a backslash"))
+  Escape  |Result
+  --------|--------
+  ~newline|\\newline
+  ~tab    |\\tab
+  ~08     |\\08
+  ~00F2   |\\00F2
+  ~a      |\\a
+  ~~      |\\~
 
-(def parse-symbol
-  (fn (reader)
-    "Parses symbols"))
+  Note that a is neither a single digit unicode or a special character like
+  a bell signal. Any escaped single character is treated as the character
+  itself, thereby removing ambiguities."
+  (def start (find-string-delimiter string delimiter 0))
+  (def end (find-string-delimiter string delimiter start))
+  (def string (convert-characters escape-character (substring (++ start) end)))
+  (string-append (substring 0 start) string (substring (++ end))))
+
+(defn find-comment-start (string comment-character index)
+  (defn i (find-first string comment-character index
+                      (fn (string i)
+                          (not (equal? (string-ref string (-- i)) #\\)))))
+  (if (not (equal? i #f))
+      i
+      #f))
+
+(defn find-comment-end (string index)
+  (defn i (string-index string #\newline index))
+  (if (not (equal? i #f))
+      (++ i)
+      #f))
+
+(defn remove-comments (comment-character string)
+  "Removes anything from the comment character to the end of the line"
+  (def start (find-comment-start string comment-character 0))
+  (if (not (equal? #f start))
+      (let ((end (or (find-comment-end string start) (length string))))
+         (string-append (substring 0 start) (remove-comments (substring end)))
+      string)))
+
+(defn parse-list (reader)
+  "Parses lists in s-expr syntax")
+
+(defn parse-number (reader)
+  "Parses rational, complex, integer and real numbers")
+
+(defn parse-character (reader)
+  "Parses characters prefixed with a backslash")
+
+(defn parse-symbol (reader)
+  "Parses symbols")
 
 (def *readtable*
   (make-readtable
-    (list (bind convert-string #\" #\~)
+    (list (bind convert-string #\" #\\)
           (bind remove-comments #\;)
           (bind convert-prefixes '(#\' quote)))
     (list parse-list
@@ -104,14 +148,15 @@
           parse-character
           parse-symbol)))
 
-(def parse
-  (fn (string . li)
-    "Parses a string using the rules in the given readtable."
-    (def (p string readtable)
-      )
-    (if (> (length li) 0)
-        (p string (car li))
-        (p string *readtable*))))
+(defn parse (string . li)
+  "Parses a string using the rules in the given readtable."
+  (defn convert (string converters)
+    (convert (cdr converters) ((car converters) string)))
+  (defn p (string parsers)
+    )
+  (if (and (> (length li) 0) (readtable? (car li)))
+      (p (convert string (readtable-converters (car li))) (readtable-parsers (car li)))
+      (p (convert string (readtable-converters *readtable*)) (readtable-parsers *readtable*))))
 
 '(parse parse-list parse-number parse-character parse-symbol make-readtable
   readtable? convert-string convert-prefix remove-comments)
