@@ -70,14 +70,18 @@
       i
       #f))
 
+; Returns a pair with the character and the index of the last character
+(defn convert-escape (string index)
+  )
+
 (defn convert-characters (escape-character string)
   (defn rec (i)
-    (def char (string-ref string char))
-    
+    (def char (string-ref string char))   
     (if (equal? char escape-character)
-        ()
-        (string-append (string #\\ char) " " (rec (++ i)))))
-    (string-append "(" (rec 0) ")"))
+        (let ((ret (convert-escape string i))
+	      (string-append "#\\" (car ret " " (rec (+ i (cdr ret))))))
+        (string-append "#\\" (string char) " " (rec (++ i)))))
+  (string-append "'(" (rec 0) ")"))
 
 (defn convert-string (delimiter escape-character string)
   "Converts instances of strings with escapes into lists of characters.
